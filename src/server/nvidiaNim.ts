@@ -40,14 +40,19 @@ export async function nvidiaChat(
         {
           role: 'system',
           content:
-            'You are an AML/CFT decision-support analyst. Never invent sanctions, PEP, regulatory, registry, court, or adverse-media facts. Treat supplied evidence as the only factual evidence. If evidence is insufficient, say so explicitly and require manual verification.',
+            'You are an AML/CFT decision-support analyst. Never invent sanctions, PEP, regulatory, registry, court, or adverse-media facts. Treat supplied evidence as the only factual evidence. Absence of supplied evidence is not evidence of a clean result. If evidence is insufficient, explicitly require manual verification. Never claim that an official sanctions list, PEP register, court record, regulator, registry, or news source was checked unless that evidence is supplied in the request.',
         },
         { role: 'user', content: prompt },
       ],
-      temperature: options.temperature ?? 0.1,
+      temperature: options.temperature ?? 0,
       max_tokens: options.maxTokens ?? 8192,
       stream: false,
-      ...(options.json ? { response_format: { type: 'json_object' } } : {}),
+      ...(options.json
+        ? {
+            response_format: { type: 'json_object' },
+            chat_template_kwargs: { enable_thinking: false },
+          }
+        : {}),
     }),
   });
 
@@ -64,10 +69,21 @@ export async function nvidiaChat(
   return content;
 }
 
+export async function nvidiaJson<T = unknown>(prompt: string, maxTokens = 8192): Promise<T> {
+  const raw = await nvidiaChat(prompt, { json: true, temperature: 0, maxTokens });
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    throw new Error('NVIDIA NIM returned invalid JSON');
+  }
+}
+
 export async function checkNvidiaNim(): Promise<{
   configured: boolean;
   reachable: boolean;
   model?: string;
+  availableModels?: string[];
   error?: string;
 }> {
   const config = getNvidiaNimConfig();
@@ -85,7 +101,11 @@ export async function checkNvidiaNim(): Promise<{
         error: `NVIDIA API returned HTTP ${response.status}`,
       };
     }
-    return { configured: true, reachable: true, model: config.model };
+    const payload = (await response.json()) as any;
+    const availableModels = Array.isArray(payload?.data)
+      ? payload.data.map((entry: any) => entry?.id).filter((id: unknown): id is string => typeof id === 'string')
+      : [];
+    return { configured: true, reachable: true, model: config.model, availableModels };
   } catch (error: any) {
     return {
       configured: true,
