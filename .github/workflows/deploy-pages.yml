@@ -20,22 +20,27 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
-          cache: npm
+          bun-version: latest
+
       - name: Install dependencies
-        run: npm install
+        run: bun install --frozen-lockfile
+
       - name: Type check
-        run: npm run lint
+        run: bun run lint
+
       - name: Build frontend
-        run: npx vite build
+        run: bunx vite build
         env:
           GITHUB_ACTIONS: 'true'
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
