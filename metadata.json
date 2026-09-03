@@ -1,0 +1,6 @@
+{
+  "name": "VeritasScreen AML & Adverse Media Intelligence",
+  "description": "AI-driven screening and real-time news monitoring of individuals and entities against adverse media, sanctions, fraud, and financial crime with advanced entity linking and verification reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
