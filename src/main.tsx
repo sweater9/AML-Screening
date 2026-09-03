@@ -3,10 +3,14 @@ import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 
-class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
-  state = { hasError: false, message: '' };
+type ErrorBoundaryProps = { children?: ReactNode };
+type ErrorBoundaryState = { hasError: boolean; message: string };
 
-  static getDerivedStateFromError(error: Error) {
+class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  declare props: Readonly<ErrorBoundaryProps>;
+  state: ErrorBoundaryState = { hasError: false, message: '' };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true, message: error?.message || 'Unknown frontend error' };
   }
 
@@ -14,7 +18,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: bo
     console.error('VeritasScreen frontend failed to render:', error, info);
   }
 
-  render() {
+  render(): ReactNode {
     if (this.state.hasError) {
       return (
         <main style={{ minHeight: '100vh', background: '#020617', color: '#e2e8f0', padding: '40px', fontFamily: 'system-ui, sans-serif' }}>
@@ -29,7 +33,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: bo
         </main>
       );
     }
-    return this.props.children;
+    return this.props.children ?? null;
   }
 }
 
