@@ -76,9 +76,16 @@ export default function App() {
     if (!requireApi()) return;
     setIsLoading(true); setError(null);
     try {
-      const res = await apiFetch('/api/screen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
-      if (!res.ok) throw new Error(`Screening request failed with status: ${res.status}`);
-      const report: VerificationReport = await res.json();
+      // Evidence is intentionally empty until authoritative source adapters populate it.
+      // The backend treats this as verification-incomplete rather than fabricating a clean result.
+      const res = await apiFetch('/api/screen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject: request, evidence: [] }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.error || `Screening request failed with status: ${res.status}`);
+      const report = payload as VerificationReport;
       setCurrentReport(report);
       persistReports([report, ...savedReports.filter(r => r.reportId !== report.reportId)]);
       setActiveTab('report');
