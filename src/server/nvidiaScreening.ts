@@ -73,84 +73,93 @@ export interface NvidiaScreeningAnalysis {
   verificationGaps: string[];
 }
 
+const ANALYSIS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    evidenceStatus: { enum: ['SUFFICIENT_FOR_ANALYSIS', 'INSUFFICIENT_REQUIRES_VERIFICATION'] },
+    complianceRecommendation: { enum: ['PASS', 'PASS_WITH_MONITORING', 'ENHANCED_DUE_DILIGENCE', 'REJECT_BLOCK'] },
+    recommendationRationale: { type: 'string' },
+    executiveSummary: { type: 'string' },
+    keyFindings: { type: 'array', items: { type: 'string' } },
+    riskAnalysis: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        compositeScore: { type: 'number', minimum: 0, maximum: 100 },
+        riskLevel: { enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
+        subScores: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            adverseMedia: { type: 'number', minimum: 0, maximum: 100 }, sanctionsWatchlist: { type: 'number', minimum: 0, maximum: 100 },
+            pepExposure: { type: 'number', minimum: 0, maximum: 100 }, financialCrimeFraud: { type: 'number', minimum: 0, maximum: 100 },
+            jurisdictionRisk: { type: 'number', minimum: 0, maximum: 100 }, opacityStructure: { type: 'number', minimum: 0, maximum: 100 },
+          },
+          required: ['adverseMedia', 'sanctionsWatchlist', 'pepExposure', 'financialCrimeFraud', 'jurisdictionRisk', 'opacityStructure'],
+        },
+        detectedTypologies: { type: 'array', items: { type: 'object' } },
+      }, required: ['compositeScore', 'riskLevel', 'subScores', 'detectedTypologies'],
+    },
+    sanctionsHits: { type: 'array', items: { type: 'object' } },
+    pepAssessment: { type: 'object' }, adverseMediaItems: { type: 'array', items: { type: 'object' } }, regulatoryActions: { type: 'array', items: { type: 'object' } },
+    recommendedMitigationSteps: { type: 'array', items: { type: 'string' } }, evidenceUsed: { type: 'array', items: { type: 'string' } }, verificationGaps: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['evidenceStatus', 'complianceRecommendation', 'recommendationRationale', 'executiveSummary', 'keyFindings', 'riskAnalysis', 'sanctionsHits', 'pepAssessment', 'adverseMediaItems', 'regulatoryActions', 'recommendedMitigationSteps', 'evidenceUsed', 'verificationGaps'],
+} as const;
+
 function clampScore(value: unknown): number {
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) return 0;
   return Math.max(0, Math.min(100, Math.round(numeric)));
 }
 
-export async function analyzeWithNvidia(
-  subject: ScreeningRequest,
-  evidence: ScreeningEvidenceItem[],
-): Promise<NvidiaScreeningAnalysis> {
-  if (!Array.isArray(evidence) || evidence.length === 0) {
-    return {
-      evidenceStatus: 'INSUFFICIENT_REQUIRES_VERIFICATION',
-      complianceRecommendation: 'ENHANCED_DUE_DILIGENCE',
-      recommendationRationale: 'No attributable screening evidence was supplied. The system cannot conclude that the subject is clear.',
-      executiveSummary: `No evidence-backed screening conclusion can be produced for ${subject.name}. Official-source verification is required.`,
-      keyFindings: ['No attributable sanctions, PEP, regulatory, registry, or adverse-media evidence was supplied to the analysis engine.'],
-      riskAnalysis: {
-        compositeScore: 50,
-        riskLevel: 'MEDIUM',
-        subScores: { adverseMedia: 0, sanctionsWatchlist: 0, pepExposure: 0, financialCrimeFraud: 0, jurisdictionRisk: 0, opacityStructure: 0 },
-        detectedTypologies: [],
-      },
-      sanctionsHits: [],
-      pepAssessment: { isPEP: null, riskJustification: 'PEP status has not been verified from supplied evidence.' },
-      adverseMediaItems: [],
-      regulatoryActions: [],
-      recommendedMitigationSteps: ['Verify the subject against authoritative sanctions and PEP sources.', 'Obtain attributable registry and adverse-media evidence before making an onboarding decision.'],
-      evidenceUsed: [],
-      verificationGaps: ['Sanctions verification', 'PEP verification', 'Regulatory verification', 'Registry/entity verification', 'Adverse-media verification'],
-    };
-  }
+function incompleteAnalysis(subject: ScreeningRequest, gaps?: string[]): NvidiaScreeningAnalysis {
+  return {
+    evidenceStatus: 'INSUFFICIENT_REQUIRES_VERIFICATION', complianceRecommendation: 'ENHANCED_DUE_DILIGENCE',
+    recommendationRationale: 'Attributable evidence is incomplete. The system cannot conclude that the subject is clear.',
+    executiveSummary: `No evidence-backed screening conclusion can be produced for ${subject.name}. Official-source verification is required.`,
+    keyFindings: ['Screening evidence is incomplete; absence of a supplied hit must not be interpreted as a clear result.'],
+    riskAnalysis: { compositeScore: 50, riskLevel: 'MEDIUM', subScores: { adverseMedia: 0, sanctionsWatchlist: 0, pepExposure: 0, financialCrimeFraud: 0, jurisdictionRisk: 0, opacityStructure: 0 }, detectedTypologies: [] },
+    sanctionsHits: [], pepAssessment: { isPEP: null, riskJustification: 'PEP status has not been verified from supplied evidence.' }, adverseMediaItems: [], regulatoryActions: [],
+    recommendedMitigationSteps: ['Verify the subject against authoritative sanctions and PEP sources.', 'Obtain attributable registry, regulatory, and adverse-media evidence before making an onboarding decision.'],
+    evidenceUsed: [], verificationGaps: gaps?.length ? gaps : ['Sanctions verification', 'PEP verification', 'Regulatory verification', 'Registry/entity verification', 'Adverse-media verification'],
+  };
+}
 
-  const evidencePayload = evidence.map(item => ({
-    id: item.id,
-    sourceType: item.sourceType,
-    sourceName: item.sourceName,
-    sourceUrl: item.sourceUrl || null,
-    publishedAt: item.publishedAt || null,
-    retrievedAt: item.retrievedAt,
-    text: item.text.slice(0, 12000),
-  }));
+function sourceCoverage(evidence: ScreeningEvidenceItem[]) {
+  const types = new Set(evidence.map(item => item.sourceType));
+  const gaps: string[] = [];
+  if (!types.has('SANCTIONS')) gaps.push('Sanctions verification');
+  if (!types.has('PEP')) gaps.push('PEP verification');
+  if (!types.has('REGULATORY')) gaps.push('Regulatory verification');
+  if (!types.has('REGISTRY')) gaps.push('Registry/entity verification');
+  if (!types.has('ADVERSE_MEDIA')) gaps.push('Adverse-media verification');
+  return gaps;
+}
 
-  const prompt = `Analyze the subject strictly against the supplied evidence bundle.
+export async function analyzeWithNvidia(subject: ScreeningRequest, evidence: ScreeningEvidenceItem[]): Promise<NvidiaScreeningAnalysis> {
+  if (!Array.isArray(evidence) || evidence.length === 0) return incompleteAnalysis(subject);
 
-SUBJECT:\n${JSON.stringify(subject, null, 2)}
+  const coverageGaps = sourceCoverage(evidence);
+  const evidencePayload = evidence.map(item => ({ id: item.id, sourceType: item.sourceType, sourceName: item.sourceName, sourceUrl: item.sourceUrl || null, publishedAt: item.publishedAt || null, retrievedAt: item.retrievedAt, text: item.text.slice(0, 12000) }));
+  const prompt = `Analyze the subject strictly against the supplied evidence bundle.\n\nSUBJECT:\n${JSON.stringify(subject, null, 2)}\n\nEVIDENCE BUNDLE:\n${JSON.stringify(evidencePayload, null, 2)}\n\nRules:\n- Every sanctions hit, adverse-media item, PEP conclusion, and regulatory action must reference an evidenceId from the bundle.\n- Never create a URL, identifier, designation, allegation, date, role, conviction, enforcement action, or registry record absent from the evidence.\n- A missing hit is not a clean result unless evidence explicitly documents a completed authoritative check.\n- When identity resolution is uncertain, require manual verification.\n- PASS is prohibited when sanctions, PEP, regulatory, registry, or adverse-media source coverage is incomplete.\n- Return JSON only.`;
 
-EVIDENCE BUNDLE:\n${JSON.stringify(evidencePayload, null, 2)}
+  const result = await nvidiaJson<NvidiaScreeningAnalysis>(prompt, 8192, ANALYSIS_SCHEMA);
+  if (!result || typeof result !== 'object' || !result.riskAnalysis?.subScores) return incompleteAnalysis(subject, coverageGaps);
 
-Rules:
-- Every sanctions hit, adverse-media item, PEP conclusion, and regulatory action must reference an evidenceId from the bundle.
-- Never create a URL, identifier, designation, allegation, date, role, conviction, enforcement action, or registry record that is absent from the evidence.
-- A missing hit is not a clean result unless the evidence explicitly documents a completed authoritative check.
-- When identity resolution is uncertain, state the ambiguity and require manual verification.
-- Use PASS only when supplied evidence supports a sufficiently complete negative screening. Otherwise prefer PASS_WITH_MONITORING or ENHANCED_DUE_DILIGENCE as appropriate.
-- Return JSON only matching the requested analysis structure.`;
-
-  const result = await nvidiaJson<NvidiaScreeningAnalysis>(prompt, 8192);
   const validEvidenceIds = new Set(evidence.map(item => item.id));
+  result.evidenceUsed = Array.isArray(result.evidenceUsed) ? result.evidenceUsed.filter(id => validEvidenceIds.has(id)) : [];
+  result.sanctionsHits = Array.isArray(result.sanctionsHits) ? result.sanctionsHits.filter(hit => validEvidenceIds.has(hit.evidenceId)) : [];
+  result.adverseMediaItems = Array.isArray(result.adverseMediaItems) ? result.adverseMediaItems.filter(item => validEvidenceIds.has(item.evidenceId)) : [];
+  result.regulatoryActions = Array.isArray(result.regulatoryActions) ? result.regulatoryActions.filter(item => validEvidenceIds.has(item.evidenceId)) : [];
+  if (result.pepAssessment?.evidenceId && !validEvidenceIds.has(result.pepAssessment.evidenceId)) result.pepAssessment = { isPEP: null, riskJustification: 'The model returned an unsupported PEP evidence reference; manual verification is required.' };
 
-  result.evidenceUsed = Array.isArray(result.evidenceUsed)
-    ? result.evidenceUsed.filter(id => validEvidenceIds.has(id))
-    : [];
-  result.sanctionsHits = Array.isArray(result.sanctionsHits)
-    ? result.sanctionsHits.filter(hit => validEvidenceIds.has(hit.evidenceId))
-    : [];
-  result.adverseMediaItems = Array.isArray(result.adverseMediaItems)
-    ? result.adverseMediaItems.filter(item => validEvidenceIds.has(item.evidenceId))
-    : [];
-  result.regulatoryActions = Array.isArray(result.regulatoryActions)
-    ? result.regulatoryActions.filter(item => validEvidenceIds.has(item.evidenceId))
-    : [];
+  result.riskAnalysis.compositeScore = clampScore(result.riskAnalysis.compositeScore);
+  for (const key of Object.keys(result.riskAnalysis.subScores)) { const scores = result.riskAnalysis.subScores as unknown as Record<string, number>; scores[key] = clampScore(scores[key]); }
 
-  result.riskAnalysis.compositeScore = clampScore(result.riskAnalysis?.compositeScore);
-  for (const key of Object.keys(result.riskAnalysis?.subScores || {})) {
-    const scores = result.riskAnalysis.subScores as unknown as Record<string, number>;
-    scores[key] = clampScore(scores[key]);
+  result.verificationGaps = Array.from(new Set([...(Array.isArray(result.verificationGaps) ? result.verificationGaps : []), ...coverageGaps]));
+  if (coverageGaps.length > 0) {
+    result.evidenceStatus = 'INSUFFICIENT_REQUIRES_VERIFICATION';
+    if (result.complianceRecommendation === 'PASS') result.complianceRecommendation = 'ENHANCED_DUE_DILIGENCE';
   }
-
   return result;
 }
