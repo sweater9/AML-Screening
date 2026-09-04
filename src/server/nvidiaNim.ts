@@ -8,6 +8,7 @@ export interface NvidiaChatOptions {
   temperature?: number;
   maxTokens?: number;
   json?: boolean;
+  jsonSchema?: Record<string, unknown>;
 }
 
 export function getNvidiaNimConfig(): NvidiaNimConfig | null {
@@ -28,6 +29,12 @@ export async function nvidiaChat(
   const config = getNvidiaNimConfig();
   if (!config) throw new Error('NVIDIA_API_KEY is not configured');
 
+  const structuredOutput = options.jsonSchema
+    ? { guided_json: options.jsonSchema }
+    : options.json
+      ? { response_format: { type: 'json_object' } }
+      : {};
+
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -47,12 +54,10 @@ export async function nvidiaChat(
       temperature: options.temperature ?? 0,
       max_tokens: options.maxTokens ?? 8192,
       stream: false,
-      ...(options.json
-        ? {
-            response_format: { type: 'json_object' },
-            chat_template_kwargs: { enable_thinking: false },
-          }
+      ...(options.json || options.jsonSchema
+        ? { chat_template_kwargs: { enable_thinking: false } }
         : {}),
+      ...structuredOutput,
     }),
   });
 
@@ -69,14 +74,31 @@ export async function nvidiaChat(
   return content;
 }
 
-export async function nvidiaJson<T = unknown>(prompt: string, maxTokens = 8192): Promise<T> {
-  const raw = await nvidiaChat(prompt, { json: true, temperature: 0, maxTokens });
+function parseNvidiaJson<T>(raw: string): T {
   const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   try {
     return JSON.parse(cleaned) as T;
   } catch {
     throw new Error('NVIDIA NIM returned invalid JSON');
   }
+}
+
+export async function nvidiaJson<T = unknown>(prompt: string, maxTokens = 8192): Promise<T> {
+  const raw = await nvidiaChat(prompt, { json: true, temperature: 0, maxTokens });
+  return parseNvidiaJson<T>(raw);
+}
+
+export async function nvidiaStructuredJson<T = unknown>(
+  prompt: string,
+  jsonSchema: Record<string, unknown>,
+  maxTokens = 8192,
+): Promise<T> {
+  const raw = await nvidiaChat(prompt, {
+    jsonSchema,
+    temperature: 0,
+    maxTokens,
+  });
+  return parseNvidiaJson<T>(raw);
 }
 
 export async function checkNvidiaNim(): Promise<{
