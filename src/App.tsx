@@ -1,124 +1,45 @@
-import React, { lazy, Suspense, useState, useEffect, useCallback } from 'react';
-import { ScreeningRequest, VerificationReport, MonitoredSubject, MonitoringAlert } from './types';
-import { Header } from './components/Header';
-import { ScreeningForm } from './components/ScreeningForm';
+import React, { useState } from 'react';
+import { AlertTriangle, ArrowLeft, BrainCircuit, CheckCircle2, Database, ExternalLink, Loader2, Search, ShieldCheck, Sparkles } from 'lucide-react';
 import { apiFetch, HAS_REMOTE_API } from './utils/api';
-import { AlertTriangle, ShieldCheck } from 'lucide-react';
 
-const ExecutiveRiskBanner = lazy(() => import('./components/ExecutiveRiskBanner').then(m => ({ default: m.ExecutiveRiskBanner })));
-const EntityLinkingSection = lazy(() => import('./components/EntityLinkingSection').then(m => ({ default: m.EntityLinkingSection })));
-const LiveNewsMonitoringView = lazy(() => import('./components/LiveNewsMonitoringView').then(m => ({ default: m.LiveNewsMonitoringView })));
-const RiskBreakdownChart = lazy(() => import('./components/RiskBreakdownChart').then(m => ({ default: m.RiskBreakdownChart })));
-const AdverseMediaSection = lazy(() => import('./components/AdverseMediaSection').then(m => ({ default: m.AdverseMediaSection })));
-const SanctionsPepSection = lazy(() => import('./components/SanctionsPepSection').then(m => ({ default: m.SanctionsPepSection })));
-const TypologiesSection = lazy(() => import('./components/TypologiesSection').then(m => ({ default: m.TypologiesSection })));
-const RegulatorySection = lazy(() => import('./components/RegulatorySection').then(m => ({ default: m.RegulatorySection })));
-const MitigationAndAuditSection = lazy(() => import('./components/MitigationAndAuditSection').then(m => ({ default: m.MitigationAndAuditSection })));
-const HistoricalReportsList = lazy(() => import('./components/HistoricalReportsList').then(m => ({ default: m.HistoricalReportsList })));
-const OfficialPrintDossier = lazy(() => import('./components/OfficialPrintDossier').then(m => ({ default: m.OfficialPrintDossier })));
-const SentimentDeepDiveView = lazy(() => import('./components/SentimentDeepDiveView').then(m => ({ default: m.SentimentDeepDiveView })));
+type Report = any;
+const scope = { adverseMedia:true, sanctionsAndWatchlists:true, fraudAndFinancialCrime:true, pepCheck:true, mlTfTypologies:true, regulatoryEnforcement:true };
+const safeArray = (v:any) => Array.isArray(v) ? v : [];
+const label = (v:any) => String(v ?? 'Not available').replaceAll('_',' ');
 
-const STORAGE_KEY = 'veritas_screen_reports_v1';
-const ViewFallback = () => <div className="py-12 text-center text-xs text-slate-500">Loading view…</div>;
+function Card({title, children, className=''}:{title:string;children:React.ReactNode;className?:string}) {
+  return <section className={`rounded-2xl border border-slate-800 bg-slate-900/70 p-5 ${className}`}><h2 className="mb-4 text-[11px] font-bold uppercase tracking-[.18em] text-slate-400">{title}</h2>{children}</section>;
+}
+function Pill({children,tone='slate'}:{children:React.ReactNode;tone?:'slate'|'green'|'amber'|'red'|'blue'}) {
+  const c={slate:'border-slate-700 bg-slate-800 text-slate-300',green:'border-emerald-700/60 bg-emerald-950/60 text-emerald-300',amber:'border-amber-700/60 bg-amber-950/60 text-amber-300',red:'border-red-700/60 bg-red-950/60 text-red-300',blue:'border-cyan-700/60 bg-cyan-950/60 text-cyan-300'}[tone];
+  return <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${c}`}>{children}</span>;
+}
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState<'screening' | 'report' | 'sentiment' | 'vault' | 'monitoring'>('screening');
-  const [currentReport, setCurrentReport] = useState<VerificationReport | null>(null);
-  const [savedReports, setSavedReports] = useState<VerificationReport[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [isSignOffOpen, setIsSignOffOpen] = useState(false);
-  const [monitoredSubjects, setMonitoredSubjects] = useState<MonitoredSubject[]>([]);
-  const [monitoringAlerts, setMonitoringAlerts] = useState<MonitoringAlert[]>([]);
-  const [isMonitoringLoading, setIsMonitoringLoading] = useState(false);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed: VerificationReport[] = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setSavedReports(parsed);
-          setCurrentReport(parsed[0]);
-        }
-      }
-    } catch (e) { console.warn('Failed to parse saved reports from localStorage:', e); }
-  }, []);
-
-  const fetchMonitoringData = useCallback(async () => {
-    if (!HAS_REMOTE_API) return;
-    try {
-      const [subsRes, alertsRes] = await Promise.all([apiFetch('/api/monitoring/subjects'), apiFetch('/api/monitoring/alerts')]);
-      if (subsRes.ok && alertsRes.ok) {
-        const subsData = await subsRes.json();
-        const alertsData = await alertsRes.json();
-        if (subsData.subjects) setMonitoredSubjects(subsData.subjects);
-        if (alertsData.alerts) setMonitoringAlerts(alertsData.alerts);
-      }
-    } catch (e) { console.warn('Failed to fetch monitoring telemetry data:', e); }
-  }, []);
-
-  useEffect(() => { fetchMonitoringData(); }, [fetchMonitoringData]);
-
-  const persistReports = (reports: VerificationReport[]) => {
-    setSavedReports(reports);
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(reports)); }
-    catch (e) { console.warn('Failed to persist reports to localStorage:', e); }
-  };
-
-  const requireApi = () => {
-    if (HAS_REMOTE_API) return true;
-    setError('Live screening is not connected yet. Deploy the included Node API and set VITE_API_BASE_URL in the frontend build. Saved reports and the audit vault remain available locally.');
-    return false;
-  };
-
-  const handleScreen = async (request: ScreeningRequest) => {
-    if (!requireApi()) return;
-    setIsLoading(true); setError(null);
-    try {
-      // Evidence is intentionally empty until authoritative source adapters populate it.
-      // The backend treats this as verification-incomplete rather than fabricating a clean result.
-      const res = await apiFetch('/api/screen', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject: request, evidence: [] }),
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payload?.error || `Screening request failed with status: ${res.status}`);
-      const report = payload as VerificationReport;
-      setCurrentReport(report);
-      persistReports([report, ...savedReports.filter(r => r.reportId !== report.reportId)]);
-      setActiveTab('report');
-    } catch (err: any) { setError(err.message || 'Failed to complete screening. Please try again.'); }
-    finally { setIsLoading(false); }
-  };
-
-  const handleUpdateReport = (updated: VerificationReport) => { setCurrentReport(updated); persistReports(savedReports.map(r => r.reportId === updated.reportId ? updated : r)); };
-  const handleDeleteReport = (reportId: string) => { const next = savedReports.filter(r => r.reportId !== reportId); persistReports(next); if (currentReport?.reportId === reportId) { setCurrentReport(next[0] || null); if (!next.length) setActiveTab('screening'); } };
-  const handleClearAll = () => { persistReports([]); setCurrentReport(null); setActiveTab('screening'); };
-  const postMonitoring = async (path: string, body: object) => { if (!requireApi()) return null; return apiFetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); };
-  const handleRefreshScan = async (subjectId?: string) => { try { setIsMonitoringLoading(true); const res = await postMonitoring('/api/monitoring/scan', { subjectId }); if (res?.ok) { const d = await res.json(); if (d.subjects) setMonitoredSubjects(d.subjects); if (d.alerts) setMonitoringAlerts(d.alerts); } } finally { setIsMonitoringLoading(false); } };
-  const handleToggleMonitoring = async (subjectId: string) => { const res = await postMonitoring('/api/monitoring/toggle', { subjectId }); if (res?.ok) { const d = await res.json(); setMonitoredSubjects(p => p.map(s => s.id === subjectId ? d.subject : s)); } };
-  const handleAcknowledgeAlert = async (alertId: string, officerName: string, actionNote: string) => { const res = await postMonitoring('/api/monitoring/acknowledge-alert', { alertId, officerName, actionNote }); if (res?.ok) { const d = await res.json(); setMonitoringAlerts(p => p.map(a => a.id === alertId ? d.alert : a)); } };
-  const handleSimulateEvent = async (subjectId?: string, headline?: string, severity?: string) => { const res = await postMonitoring('/api/monitoring/simulate-feed-event', { subjectId, customHeadline: headline, severity }); if (res?.ok) { const d = await res.json(); if (d.alerts) setMonitoringAlerts(d.alerts); if (d.subject) setMonitoredSubjects(p => p.map(s => s.id === d.subject.id ? d.subject : s)); } };
-  const handleEnrollInMonitoring = async (report: VerificationReport) => { const res = await postMonitoring('/api/monitoring/enroll', { subjectName: report.subject.name, subjectType: report.subject.subjectType, jurisdiction: report.subject.jurisdiction, reportId: report.reportId, initialRiskScore: report.riskAnalysis.compositeScore, riskLevel: report.riskAnalysis.riskLevel, linkedRegistryId: report.linkedEntityProfile?.externalId || 'GLEIF / Wikidata Profile' }); if (res?.ok) { const d = await res.json(); if (!d.alreadyEnrolled) setMonitoredSubjects(p => [d.subject, ...p]); handleUpdateReport({ ...report, isMonitored: true }); setActiveTab('monitoring'); } };
-
-  const unackAlertsCount = monitoringAlerts.filter(a => !a.acknowledged).length;
-
-  return <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-indigo-500/30 selection:text-indigo-200">
-    <Header activeTab={activeTab} setActiveTab={setActiveTab} currentReport={currentReport} savedReportsCount={savedReports.length} unacknowledgedAlertsCount={unackAlertsCount} onNewScreening={() => setActiveTab('screening')} />
-    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {!HAS_REMOTE_API && <div className="mb-6 p-4 rounded-xl bg-amber-950/40 border border-amber-700/60 text-amber-200 text-xs flex items-start gap-2"><AlertTriangle className="w-4 h-4 shrink-0 mt-0.5"/><span><strong>Frontend preview:</strong> the interface is deployed correctly, but live AML screening and monitoring require the secure server API. Configure <code>VITE_API_BASE_URL</code> for production before relying on screening results.</span></div>}
-      {error && <div className="mb-6 p-4 rounded-xl bg-red-950/60 border border-red-800 text-red-300 text-xs flex items-center justify-between"><div className="flex items-center space-x-2"><AlertTriangle className="w-4 h-4 shrink-0 text-red-400"/><span>{error}</span></div><button onClick={() => setError(null)} className="text-red-400 hover:text-white font-bold ml-4">&times;</button></div>}
-      {activeTab === 'screening' && <div className="space-y-6"><ScreeningForm onScreen={handleScreen} isLoading={isLoading}/></div>}
-      <Suspense fallback={<ViewFallback/>}>
-        {activeTab === 'report' && currentReport && <div className="space-y-8"><ExecutiveRiskBanner report={currentReport} onOpenSignOff={() => setIsSignOffOpen(true)}/><EntityLinkingSection linkedProfile={currentReport.linkedEntityProfile} report={currentReport} onEnrollInMonitoring={handleEnrollInMonitoring} isEnrolledInMonitoring={monitoredSubjects.some(s => s.subjectName.toLowerCase() === currentReport.subject.name.toLowerCase() && s.monitoringStatus !== 'PAUSED')}/><RiskBreakdownChart riskAnalysis={currentReport.riskAnalysis}/><AdverseMediaSection items={currentReport.adverseMediaItems} groundingSources={currentReport.groundingSources}/><SanctionsPepSection sanctionsHits={currentReport.sanctionsHits} pepHit={currentReport.pepHit}/><TypologiesSection typologies={currentReport.riskAnalysis.detectedTypologies}/><RegulatorySection actions={currentReport.regulatoryActions}/><MitigationAndAuditSection report={currentReport} onUpdateReport={handleUpdateReport} isSignOffOpen={isSignOffOpen} setIsSignOffOpen={setIsSignOffOpen}/></div>}
-        {activeTab === 'sentiment' && currentReport && <SentimentDeepDiveView report={currentReport}/>} 
-        {activeTab === 'monitoring' && <LiveNewsMonitoringView subjects={monitoredSubjects} alerts={monitoringAlerts} isLoading={isMonitoringLoading} onRefreshScan={handleRefreshScan} onToggleMonitoring={handleToggleMonitoring} onAcknowledgeAlert={handleAcknowledgeAlert} onSimulateEvent={handleSimulateEvent} onViewReportDossier={(repId) => { const matched = savedReports.find(r => r.reportId === repId); if (matched) { setCurrentReport(matched); setActiveTab('report'); } }}/>} 
-        {activeTab === 'vault' && <HistoricalReportsList reports={savedReports} onSelectReport={(report) => { setCurrentReport(report); setActiveTab('report'); }} onDeleteReport={handleDeleteReport} onClearAll={handleClearAll}/>} 
-        {currentReport && <OfficialPrintDossier report={currentReport}/>} 
-      </Suspense>
-    </main>
-    <footer className="no-print mt-16 border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500"><div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2"><div className="flex items-center space-x-2"><ShieldCheck className="w-4 h-4 text-indigo-400"/><span>VeritasScreen Compliance Intelligence — Regulatory Screening Suite</span></div><div className="text-[11px] text-slate-600">Decision-support prototype • Compliance officer review required</div></div></footer>
+export default function App(){
+  const [name,setName]=useState(''); const [jurisdiction,setJurisdiction]=useState(''); const [subjectType,setSubjectType]=useState<'individual'|'entity'>('individual');
+  const [dob,setDob]=useState(''); const [aliases,setAliases]=useState(''); const [loading,setLoading]=useState(false); const [error,setError]=useState(''); const [report,setReport]=useState<Report|null>(null);
+  async function screen(e:React.FormEvent){ e.preventDefault(); if(!name.trim()) return; if(!HAS_REMOTE_API){setError('Secure screening API is not configured for this build.');return;} setLoading(true);setError('');
+    try { const subject={subjectType,name:name.trim(),aliases:aliases.split(',').map(x=>x.trim()).filter(Boolean),jurisdiction:jurisdiction.trim()||'Unspecified',dobOrIncorporationYear:dob.trim()||undefined,screeningScope:scope};
+      const res=await apiFetch('/api/screen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subject,evidence:[]})}); const data=await res.json().catch(()=>({})); if(!res.ok) throw new Error(data?.error||`Screening failed (${res.status})`); setReport(data);
+    } catch(err:any){setError(err?.message||'Screening could not be completed.');} finally{setLoading(false);} }
+  const risk=report?.riskAnalysis||{}; const gaps=safeArray(report?.verificationGaps); const hits=safeArray(report?.sanctionsHits); const pep=report?.pepAssessment;
+  return <div className="min-h-screen bg-[#05070b] text-slate-100">
+    <header className="sticky top-0 z-20 border-b border-white/5 bg-[#05070b]/90 backdrop-blur-xl"><div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4"><div className="flex items-center gap-3"><div className="grid h-9 w-9 place-items-center rounded-xl border border-cyan-400/20 bg-cyan-400/10"><ShieldCheck className="h-5 w-5 text-cyan-300"/></div><div><div className="font-semibold tracking-tight">VeritasScreen <span className="text-cyan-300">AI</span></div><div className="text-[10px] uppercase tracking-[.18em] text-slate-500">Evidence-bound compliance intelligence</div></div></div><div className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${HAS_REMOTE_API?'bg-emerald-400':'bg-amber-400'}`}/><span className="text-xs text-slate-400">{HAS_REMOTE_API?'Secure API connected':'API not configured'}</span></div></div></header>
+    <main className="mx-auto max-w-7xl px-5 py-8">
+      {!report ? <div className="grid gap-8 lg:grid-cols-[1.05fr_.95fr] lg:items-center">
+        <div className="py-8 lg:py-16"><Pill tone="blue"><Sparkles className="mr-1.5 h-3 w-3"/>NVIDIA NIM screening engine</Pill><h1 className="mt-5 max-w-3xl text-4xl font-semibold leading-tight tracking-[-.035em] text-white sm:text-5xl">Screen risk with evidence.<br/><span className="text-slate-500">Not AI guesswork.</span></h1><p className="mt-5 max-w-xl text-sm leading-7 text-slate-400">A clean, API-native screening console for sanctions evidence and AI-assisted risk analysis. Missing coverage is shown as a verification gap — never silently treated as clearance.</p><div className="mt-8 grid max-w-xl grid-cols-3 gap-3">{[['3','Official sanctions sources'],['AI','Evidence-bound reasoning'],['0','Fabricated clearances']].map(([a,b])=><div key={b} className="rounded-xl border border-white/5 bg-white/[.025] p-4"><div className="text-xl font-semibold text-white">{a}</div><div className="mt-1 text-[10px] leading-4 text-slate-500">{b}</div></div>)}</div></div>
+        <form onSubmit={screen} className="rounded-3xl border border-white/10 bg-slate-900/55 p-6 shadow-2xl shadow-cyan-950/10 backdrop-blur"><div className="mb-6 flex items-center gap-2"><BrainCircuit className="h-5 w-5 text-cyan-300"/><div><div className="font-semibold">New screening</div><div className="text-xs text-slate-500">Submit directly to the secure evidence API</div></div></div><div className="mb-5 grid grid-cols-2 rounded-xl bg-slate-950 p-1">{(['individual','entity'] as const).map(t=><button type="button" key={t} onClick={()=>setSubjectType(t)} className={`rounded-lg px-3 py-2 text-xs font-semibold capitalize transition ${subjectType===t?'bg-slate-800 text-white':'text-slate-500'}`}>{t}</button>)}</div>
+          <div className="space-y-4">{[['Name *',name,setName,'Full legal or registered name'],['Jurisdiction',jurisdiction,setJurisdiction,'Country / jurisdiction'],['DOB / incorporation',dob,setDob,'YYYY-MM-DD or year'],['Aliases',aliases,setAliases,'Comma-separated aliases']].map(([l,v,s,p]:any)=><label key={l} className="block"><span className="mb-1.5 block text-xs font-medium text-slate-400">{l}</span><input value={v} onChange={e=>s(e.target.value)} placeholder={p} required={l==='Name *'} className="w-full rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-3 text-sm outline-none transition placeholder:text-slate-700 focus:border-cyan-700"/></label>)}</div>
+          {error&&<div className="mt-4 flex gap-2 rounded-xl border border-red-900/60 bg-red-950/40 p-3 text-xs text-red-300"><AlertTriangle className="h-4 w-4 shrink-0"/>{error}</div>}<button disabled={loading} className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-300 px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-cyan-200 disabled:opacity-60">{loading?<><Loader2 className="h-4 w-4 animate-spin"/>Screening evidence & reasoning…</>:<><Search className="h-4 w-4"/>Run screening</>}</button><p className="mt-3 text-center text-[10px] leading-4 text-slate-600">Decision-support prototype. Compliance officer review remains required.</p></form>
+      </div> : <div className="space-y-5">
+        <button onClick={()=>setReport(null)} className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white"><ArrowLeft className="h-4 w-4"/>New screening</button>
+        <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-slate-900 to-slate-950 p-6"><div className="flex flex-col justify-between gap-5 md:flex-row md:items-start"><div><div className="mb-2 flex flex-wrap gap-2"><Pill tone={report.evidenceStatus==='SUFFICIENT_FOR_ANALYSIS'?'green':'amber'}>{label(report.evidenceStatus)}</Pill><Pill tone={risk.riskLevel==='LOW'?'green':risk.riskLevel==='CRITICAL'?'red':'amber'}>{label(risk.riskLevel)} risk</Pill></div><h1 className="text-3xl font-semibold tracking-tight">{report.subject?.name||'Screening report'}</h1><p className="mt-2 text-xs text-slate-500">{report.reportId} · {report.generatedAt?new Date(report.generatedAt).toLocaleString():'Generated now'}</p></div><div className="rounded-2xl border border-white/5 bg-black/20 px-6 py-4 text-center"><div className="text-4xl font-semibold text-white">{Number.isFinite(risk.compositeScore)?risk.compositeScore:'—'}</div><div className="mt-1 text-[10px] uppercase tracking-widest text-slate-500">Composite risk</div></div></div><p className="mt-6 max-w-4xl text-sm leading-7 text-slate-300">{report.executiveSummary||'No executive summary returned.'}</p></div>
+        <div className="grid gap-5 lg:grid-cols-3"><Card title="Recommendation" className="lg:col-span-2"><div className="mb-3 text-lg font-semibold text-white">{label(report.complianceRecommendation)}</div><p className="text-sm leading-6 text-slate-400">{report.recommendationRationale||'No rationale returned.'}</p></Card><Card title="Evidence coverage"><div className="flex items-center gap-3"><Database className="h-8 w-8 text-cyan-300"/><div><div className="text-2xl font-semibold">{report.officialSourceCount??0}</div><div className="text-xs text-slate-500">official evidence items</div></div></div></Card></div>
+        <div className="grid gap-5 lg:grid-cols-2"><Card title="Sanctions candidates">{hits.length? <div className="space-y-3">{hits.map((h:any,i:number)=><div key={i} className="rounded-xl border border-red-900/40 bg-red-950/20 p-4"><div className="flex justify-between gap-3"><b className="text-sm">{h.matchedName}</b><Pill tone="red">{h.matchConfidence}%</Pill></div><div className="mt-1 text-xs text-red-300">{h.listName}</div><p className="mt-2 text-xs leading-5 text-slate-400">{h.reason}</p>{h.sourceUrl&&<a href={h.sourceUrl} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs text-cyan-300">Source <ExternalLink className="h-3 w-3"/></a>}</div>)}</div>:<div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4"><div className="flex items-center gap-2 text-sm font-semibold"><CheckCircle2 className="h-4 w-4 text-slate-400"/>No candidate matches returned</div><p className="mt-2 text-xs leading-5 text-slate-500">This is not a universal sanctions-clearance conclusion. Review coverage gaps below.</p></div>}</Card>
+          <Card title="PEP assessment"><div className="text-lg font-semibold">{pep?.isPEP===true?'PEP evidence flagged':pep?.isPEP===false?'PEP evidence indicates no match':'Not verified'}</div><p className="mt-3 text-sm leading-6 text-slate-400">{pep?.riskJustification||'No attributable PEP evidence was returned.'}</p>{pep?.role&&<div className="mt-3 text-xs text-slate-300">Role: {pep.role}</div>}</Card></div>
+        <div className="grid gap-5 lg:grid-cols-2"><Card title="Key findings"><ul className="space-y-3">{safeArray(report.keyFindings).map((x:any,i:number)=><li key={i} className="flex gap-3 text-sm leading-6 text-slate-300"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300"/>{x}</li>)}</ul></Card><Card title="Verification gaps"><ul className="space-y-3">{gaps.length?gaps.map((x:any,i:number)=><li key={i} className="flex gap-3 text-sm leading-6 text-amber-200"><AlertTriangle className="mt-1 h-4 w-4 shrink-0 text-amber-400"/>{x}</li>):<li className="text-sm text-emerald-300">No verification gaps reported by the API.</li>}</ul></Card></div>
+        <Card title="Recommended next steps"><div className="grid gap-3 md:grid-cols-2">{safeArray(report.recommendedMitigationSteps).map((x:any,i:number)=><div key={i} className="rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-sm leading-6 text-slate-300">{i+1}. {x}</div>)}</div></Card>
+      </div>}
+    </main><footer className="mt-14 border-t border-white/5 px-5 py-6 text-center text-[10px] uppercase tracking-[.14em] text-slate-700">VeritasScreen AI · Evidence-bound screening · Build 2</footer>
   </div>;
 }
