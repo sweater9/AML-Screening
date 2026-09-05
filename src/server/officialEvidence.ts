@@ -5,6 +5,8 @@ const UK_SANCTIONS_CSV = 'https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-Li
 const UK_SANCTIONS_PAGE = 'https://www.gov.uk/government/publications/the-uk-sanctions-list';
 const OFAC_SDN_CSV = 'https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.CSV';
 const OFAC_SLS_PAGE = 'https://ofac.treasury.gov/sanctions-list-service';
+const UN_CONSOLIDATED_XML = 'https://main.un.org/securitycouncil/sites/default/files/2026-08/consolidated.xml';
+const UN_CONSOLIDATED_PAGE = 'https://main.un.org/securitycouncil/content/un-sc-consolidated-list';
 
 function normalize(value: string): string {
   return value.toLocaleLowerCase('en').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
@@ -16,10 +18,10 @@ function searchTerms(subject: ScreeningRequest): string[] {
   return Array.from(new Set(raw.map(normalize).filter(Boolean)));
 }
 
-function csvLinesContaining(csv: string, terms: string[], limit = 25): string[] {
+function linesContaining(text: string, terms: string[], limit = 25): string[] {
   if (!terms.length) return [];
   const matches: string[] = [];
-  for (const line of csv.split(/\r?\n/)) {
+  for (const line of text.split(/\r?\n/)) {
     const normalized = normalize(line);
     if (terms.some(term => normalized.includes(term))) {
       matches.push(line.slice(0, 6000));
@@ -43,8 +45,8 @@ async function fetchText(url: string): Promise<string> {
 
 async function listEvidence(id: string, sourceName: string, dataUrl: string, sourceUrl: string, terms: string[]): Promise<ScreeningEvidenceItem> {
   const retrievedAt = new Date().toISOString();
-  const csv = await fetchText(dataUrl);
-  const matches = csvLinesContaining(csv, terms);
+  const data = await fetchText(dataUrl);
+  const matches = linesContaining(data, terms);
   return {
     id,
     sourceType: 'SANCTIONS',
@@ -67,6 +69,7 @@ export async function collectOfficialSanctionsEvidence(subject: ScreeningRequest
   const sources = [
     ['ofac-sdn', 'US Treasury OFAC SDN List', OFAC_SDN_CSV, OFAC_SLS_PAGE],
     ['uk-sanctions', 'UK Foreign, Commonwealth & Development Office Sanctions List', UK_SANCTIONS_CSV, UK_SANCTIONS_PAGE],
+    ['un-consolidated', 'United Nations Security Council Consolidated Sanctions List', UN_CONSOLIDATED_XML, UN_CONSOLIDATED_PAGE],
   ] as const;
   const settled = await Promise.allSettled(sources.map(([id, name, dataUrl, sourceUrl]) => listEvidence(id, name, dataUrl, sourceUrl, terms)));
   const evidence: ScreeningEvidenceItem[] = [];
