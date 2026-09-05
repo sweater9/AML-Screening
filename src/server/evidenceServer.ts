@@ -31,9 +31,12 @@ export function createEvidenceServer() {
   app.use(applyCors);
   app.use(express.json({ limit: '2mb' }));
 
+  app.get('/', (_req, res) => res.status(200).json({ service: 'VeritasScreen Evidence API', status: 'online', health: '/api/health', screening: '/api/screen' }));
+  app.get('/api/live', (_req, res) => res.status(200).json({ status: 'ok', service: 'VeritasScreen Evidence API', timestamp: new Date().toISOString() }));
+
   app.get('/api/health', async (_req, res) => {
     const nvidia = await checkNvidiaNim();
-    res.status(nvidia.configured && nvidia.reachable ? 200 : 503).json({ status: nvidia.configured && nvidia.reachable ? 'ok' : 'degraded', timestamp: new Date().toISOString(), screeningEngine: 'NVIDIA_NIM_EVIDENCE_BOUND', officialSources: ['US Treasury OFAC SDN List', 'UK Sanctions List'], nvidia: { configured: nvidia.configured, reachable: nvidia.reachable, model: nvidia.model, error: nvidia.error } });
+    res.status(nvidia.configured && nvidia.reachable ? 200 : 503).json({ status: nvidia.configured && nvidia.reachable ? 'ok' : 'degraded', timestamp: new Date().toISOString(), screeningEngine: 'NVIDIA_NIM_EVIDENCE_BOUND', officialSources: ['US Treasury OFAC SDN List', 'UK Sanctions List', 'United Nations Security Council Consolidated Sanctions List'], nvidia: { configured: nvidia.configured, reachable: nvidia.reachable, model: nvidia.model, error: nvidia.error } });
   });
 
   app.post('/api/screen', async (req, res) => {
