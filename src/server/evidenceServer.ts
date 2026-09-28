@@ -4,6 +4,7 @@ import type { ScreeningRequest } from '../types';
 import { analyzeWithNvidia, type ScreeningEvidenceItem } from './nvidiaScreening';
 import { checkNvidiaNim } from './nvidiaNim';
 import { collectOfficialSanctionsEvidence } from './officialEvidence';
+import { collectPublicDomainEvidence } from './publicDomainEvidence';
 
 dotenv.config();
 
@@ -36,7 +37,7 @@ export function createEvidenceServer() {
 
   app.get('/api/health', async (_req, res) => {
     const nvidia = await checkNvidiaNim();
-    res.status(nvidia.configured && nvidia.reachable ? 200 : 503).json({ status: nvidia.configured && nvidia.reachable ? 'ok' : 'degraded', timestamp: new Date().toISOString(), screeningEngine: 'NVIDIA_NIM_EVIDENCE_BOUND', officialSources: ['US Treasury OFAC SDN List', 'UK Sanctions List', 'United Nations Security Council Consolidated Sanctions List'], nvidia: { configured: nvidia.configured, reachable: nvidia.reachable, model: nvidia.model, error: nvidia.error } });
+    res.status(nvidia.configured && nvidia.reachable ? 200 : 503).json({ status: nvidia.configured && nvidia.reachable ? 'ok' : 'degraded', timestamp: new Date().toISOString(), screeningEngine: 'NVIDIA_NIM_EVIDENCE_BOUND', officialSources: ['US Treasury OFAC SDN List', 'US Treasury OFAC Consolidated Non-SDN Lists', 'UK Sanctions List', 'United Nations Security Council Consolidated Sanctions List', 'European Union Consolidated Financial Sanctions List'], publicDomainSources: ['Wikidata Public Figure & Entity Knowledge Graph', 'GDELT Global Open News Index', 'US SEC EDGAR Company Registry', 'OpenCorporates Global Business Registry'], nvidia: { configured: nvidia.configured, reachable: nvidia.reachable, model: nvidia.model, error: nvidia.error } });
   });
 
   app.post('/api/screen', async (req, res) => {
@@ -47,12 +48,16 @@ export function createEvidenceServer() {
       if (rawEvidence !== undefined && !Array.isArray(rawEvidence)) return res.status(400).json({ error: 'Evidence must be an array.' });
 
       const suppliedEvidence = (Array.isArray(rawEvidence) ? rawEvidence : []).filter(isEvidenceItem);
-      const official = await collectOfficialSanctionsEvidence(subject);
-      const evidence = [...official.evidence, ...suppliedEvidence];
+      const [official, publicDomain] = await Promise.all([
+        collectOfficialSanctionsEvidence(subject),
+        collectPublicDomainEvidence(subject),
+      ]);
+      const evidence = [...official.evidence, ...publicDomain.evidence, ...suppliedEvidence];
+      const sourceErrors = [...official.sourceErrors, ...publicDomain.sourceErrors];
       const analysis = await analyzeWithNvidia(subject, evidence);
-      analysis.verificationGaps = Array.from(new Set([...analysis.verificationGaps, ...official.sourceErrors]));
+      analysis.verificationGaps = Array.from(new Set([...analysis.verificationGaps, ...sourceErrors]));
 
-      return res.json({ reportId: `VER-${Date.now().toString(36).toUpperCase()}`, generatedAt: new Date().toISOString(), investigator: 'VeritasScreen NVIDIA NIM Evidence Analysis', subject, evidenceCount: evidence.length, officialSourceCount: official.evidence.length, sourceErrors: official.sourceErrors, ...analysis });
+      return res.json({ reportId: `VER-${Date.now().toString(36).toUpperCase()}`, generatedAt: new Date().toISOString(), investigator: 'VeritasScreen NVIDIA NIM Evidence Analysis', subject, evidenceCount: evidence.length, officialSourceCount: official.evidence.length, publicDomainSourceCount: publicDomain.evidence.length, sourceErrors, ...analysis });
     } catch (error: any) {
       console.error('[screening]', error);
       return res.status(502).json({ error: 'Screening analysis could not be completed.', evidenceStatus: 'INSUFFICIENT_REQUIRES_VERIFICATION', manualVerificationRequired: true });

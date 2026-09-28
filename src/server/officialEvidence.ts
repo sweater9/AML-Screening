@@ -5,8 +5,12 @@ const UK_SANCTIONS_CSV = 'https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-Li
 const UK_SANCTIONS_PAGE = 'https://www.gov.uk/government/publications/the-uk-sanctions-list';
 const OFAC_SDN_CSV = 'https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.CSV';
 const OFAC_SLS_PAGE = 'https://ofac.treasury.gov/sanctions-list-service';
+const OFAC_NONSDN_CSV = 'https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/CONS_PRIM.CSV';
+const OFAC_NONSDN_PAGE = 'https://ofac.treasury.gov/consolidated-sanctions-list-non-sdn-lists';
 const UN_CONSOLIDATED_XML = 'https://main.un.org/securitycouncil/sites/default/files/2026-08/consolidated.xml';
 const UN_CONSOLIDATED_PAGE = 'https://main.un.org/securitycouncil/content/un-sc-consolidated-list';
+const EU_SANCTIONS_CSV = 'https://webgate.ec.europa.eu/fsd/fsf/public/files/csvFullSanctionsList/content?token=dG9rZW4tMjAxNw';
+const EU_SANCTIONS_PAGE = 'https://data.europa.eu/data/datasets/consolidated-list-of-persons-groups-and-entities-subject-to-eu-financial-sanctions';
 
 function normalize(value: string): string {
   return value.toLocaleLowerCase('en').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
@@ -67,9 +71,11 @@ export interface OfficialEvidenceResult {
 export async function collectOfficialSanctionsEvidence(subject: ScreeningRequest): Promise<OfficialEvidenceResult> {
   const terms = searchTerms(subject);
   const sources = [
-    ['ofac-sdn', 'US Treasury OFAC SDN List', OFAC_SDN_CSV, OFAC_SLS_PAGE],
+    ['ofac-sdn', 'US Treasury OFAC Specially Designated Nationals (SDN) List', OFAC_SDN_CSV, OFAC_SLS_PAGE],
+    ['ofac-nonsdn', 'US Treasury OFAC Consolidated Non-SDN Sanctions Lists', OFAC_NONSDN_CSV, OFAC_NONSDN_PAGE],
     ['uk-sanctions', 'UK Foreign, Commonwealth & Development Office Sanctions List', UK_SANCTIONS_CSV, UK_SANCTIONS_PAGE],
     ['un-consolidated', 'United Nations Security Council Consolidated Sanctions List', UN_CONSOLIDATED_XML, UN_CONSOLIDATED_PAGE],
+    ['eu-consolidated', 'European Union Consolidated Financial Sanctions List', EU_SANCTIONS_CSV, EU_SANCTIONS_PAGE],
   ] as const;
   const settled = await Promise.allSettled(sources.map(([id, name, dataUrl, sourceUrl]) => listEvidence(id, name, dataUrl, sourceUrl, terms)));
   const evidence: ScreeningEvidenceItem[] = [];
