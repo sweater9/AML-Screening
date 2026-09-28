@@ -1,5 +1,6 @@
 import type { ScreeningRequest } from '../types';
 import type { ScreeningEvidenceItem } from './nvidiaScreening';
+import { normalizeName, rankCandidates } from './nameMatching';
 
 const UK_SANCTIONS_CSV = 'https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.csv';
 const UK_SANCTIONS_PAGE = 'https://www.gov.uk/government/publications/the-uk-sanctions-list';
@@ -12,27 +13,38 @@ const UN_CONSOLIDATED_PAGE = 'https://main.un.org/securitycouncil/content/un-sc-
 const EU_SANCTIONS_CSV = 'https://webgate.ec.europa.eu/fsd/fsf/public/files/csvFullSanctionsList/content?token=dG9rZW4tMjAxNw';
 const EU_SANCTIONS_PAGE = 'https://data.europa.eu/data/datasets/consolidated-list-of-persons-groups-and-entities-subject-to-eu-financial-sanctions';
 
-function normalize(value: string): string {
-  return value.toLocaleLowerCase('en').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
-}
-
 function searchTerms(subject: ScreeningRequest): string[] {
   const raw = [subject.name, ...(Array.isArray((subject as any).aliases) ? (subject as any).aliases : [])]
     .filter((value): value is string => typeof value === 'string' && value.trim().length >= 3);
-  return Array.from(new Set(raw.map(normalize).filter(Boolean)));
+  return Array.from(new Set(raw.map(value => value.trim()).filter(Boolean)));
 }
 
-function linesContaining(text: string, terms: string[], limit = 25): string[] {
+// Matching pipeline (mirrors a commercial watchlist-screening engine):
+// 1. Coarse pre-filter, to avoid scoring every line of a multi-megabyte list,
+//    keeping any line that shares at least one significant name token with a
+//    search term.
+// 2. Score every surviving candidate with the fuzzy/token name-matching
+//    engine and rank by confidence.
+// 3. Drop anything the engine classifies as a false positive so downstream
+//    analysis is prioritized by match quality instead of raw substring noise.
+function candidateLines(text: string, terms: string[], limit = 25): { line: string; score: number; matchType: string; matchedTerm: string }[] {
   if (!terms.length) return [];
-  const matches: string[] = [];
+  const termTokens = new Set(terms.flatMap(term => normalizeName(term).split(' ').filter(token => token.length >= 3)));
+  if (!termTokens.size) return [];
+
+  const preFiltered: string[] = [];
   for (const line of text.split(/\r?\n/)) {
-    const normalized = normalize(line);
-    if (terms.some(term => normalized.includes(term))) {
-      matches.push(line.slice(0, 6000));
-      if (matches.length >= limit) break;
+    if (!line.trim()) continue;
+    const normalized = normalizeName(line);
+    if ([...termTokens].some(token => normalized.includes(token))) {
+      preFiltered.push(line.slice(0, 6000));
+      if (preFiltered.length >= limit * 8) break; // bound work on very large lists
     }
   }
-  return matches;
+
+  return rankCandidates(preFiltered, terms, line => line, 'PARTIAL')
+    .slice(0, limit)
+    .map(({ item, match }) => ({ line: item, score: match.score, matchType: match.matchType, matchedTerm: match.matchedTerm }));
 }
 
 async function fetchText(url: string): Promise<string> {
@@ -50,16 +62,17 @@ async function fetchText(url: string): Promise<string> {
 async function listEvidence(id: string, sourceName: string, dataUrl: string, sourceUrl: string, terms: string[]): Promise<ScreeningEvidenceItem> {
   const retrievedAt = new Date().toISOString();
   const data = await fetchText(dataUrl);
-  const matches = linesContaining(data, terms);
+  const matches = candidateLines(data, terms);
+  const lines = matches.map(m => `[MATCH ${m.score}% ${m.matchType} vs "${m.matchedTerm}"] ${m.line}`);
   return {
     id,
     sourceType: 'SANCTIONS',
     sourceName,
     sourceUrl,
     retrievedAt,
-    text: matches.length
-      ? `Authoritative list retrieval completed at ${retrievedAt}. Potential text matches for the supplied subject terms follow. These are candidates only and require identity resolution.\n${matches.join('\n')}`
-      : `Authoritative list retrieval completed at ${retrievedAt}. No text candidate containing the supplied normalized subject name or aliases was found in the retrieved dataset. This is a name-search result only and does not establish that the subject is clear.`,
+    text: lines.length
+      ? `Authoritative list retrieval completed at ${retrievedAt}. Candidates were scored by a fuzzy name-matching engine (token-overlap + Jaro-Winkler similarity) against the supplied subject name and aliases, ranked by confidence, and low-probability text matches were discarded as false positives. Remaining candidates require identity resolution before any compliance conclusion is drawn:\n${lines.join('\n')}`
+      : `Authoritative list retrieval completed at ${retrievedAt}. The fuzzy name-matching engine found no candidate record in the retrieved dataset scoring above the false-positive threshold for the supplied subject name or aliases. This is a name-search result only and does not establish that the subject is clear.`,
   };
 }
 

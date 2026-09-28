@@ -1,5 +1,6 @@
 import type { ScreeningRequest } from '../types';
 import type { ScreeningEvidenceItem } from './nvidiaScreening';
+import { rankCandidates } from './nameMatching';
 
 const USER_AGENT = 'VeritasScreen/1.0 compliance-screening (public-domain-osint)';
 
@@ -189,35 +190,39 @@ async function collectOpenCorporatesEvidence(subject: ScreeningRequest): Promise
   const retrievedAt = new Date().toISOString();
   const items: ScreeningEvidenceItem[] = [];
 
+  const terms = [term, ...(Array.isArray(subject.aliases) ? subject.aliases : [])].filter(v => typeof v === 'string' && v.trim().length >= 3);
+
   if (subject.subjectType === 'entity') {
     const url = `${OPENCORPORATES_SEARCH_URL}?q=${encodeURIComponent(term)}&per_page=15`;
     const payload = await fetchJson<{ results?: { companies?: Array<{ company: any }> } }>(url);
-    const companies = payload.results?.companies || [];
-    const lines = companies.slice(0, 15).map(({ company }) => `- ${company?.name || 'Unknown'} | ${company?.jurisdiction_code || 'unknown jurisdiction'} | status: ${company?.current_status || 'unknown'} | ${company?.opencorporates_url || ''}`).join('\n');
+    const companies = (payload.results?.companies || []).map(c => c.company);
+    const ranked = rankCandidates(companies, terms, company => company?.name || '', 'PARTIAL');
+    const lines = ranked.map(({ item: company, match }) => `- [${match.score}% ${match.matchType}] ${company?.name || 'Unknown'} | ${company?.jurisdiction_code || 'unknown jurisdiction'} | status: ${company?.current_status || 'unknown'} | ${company?.opencorporates_url || ''}`).join('\n');
     items.push({
       id: 'opencorporates-registry',
       sourceType: 'REGISTRY',
       sourceName: 'OpenCorporates Global Business Registry',
       sourceUrl: url,
       retrievedAt,
-      text: companies.length
-        ? `OpenCorporates registry search for "${term}" returned the following candidate legal-entity records across global company registers. Identity match must be confirmed:\n${lines}`
-        : `OpenCorporates registry search for "${term}" returned no candidate legal-entity records.`,
+      text: ranked.length
+        ? `OpenCorporates registry search for "${term}" returned the following candidate legal-entity records, scored by a fuzzy name-matching engine and ranked by confidence (low-probability results discarded). Identity match must still be confirmed:\n${lines}`
+        : `OpenCorporates registry search for "${term}" returned no candidate legal-entity records scoring above the false-positive threshold.`,
     });
   } else {
     const url = `${OPENCORPORATES_OFFICERS_URL}?q=${encodeURIComponent(term)}&per_page=15`;
     const payload = await fetchJson<{ results?: { officers?: Array<{ officer: any }> } }>(url);
-    const officers = payload.results?.officers || [];
-    const lines = officers.slice(0, 15).map(({ officer }) => `- ${officer?.name || 'Unknown'} | role: ${officer?.position || 'unspecified'} | company: ${officer?.company?.name || 'unknown'} (${officer?.company?.jurisdiction_code || 'unknown jurisdiction'}) | ${officer?.opencorporates_url || ''}`).join('\n');
+    const officers = (payload.results?.officers || []).map(o => o.officer);
+    const ranked = rankCandidates(officers, terms, officer => officer?.name || '', 'PARTIAL');
+    const lines = ranked.map(({ item: officer, match }) => `- [${match.score}% ${match.matchType}] ${officer?.name || 'Unknown'} | role: ${officer?.position || 'unspecified'} | company: ${officer?.company?.name || 'unknown'} (${officer?.company?.jurisdiction_code || 'unknown jurisdiction'}) | ${officer?.opencorporates_url || ''}`).join('\n');
     items.push({
       id: 'opencorporates-officers',
       sourceType: 'REGISTRY',
       sourceName: 'OpenCorporates Global Officers & Directorships Index',
       sourceUrl: url,
       retrievedAt,
-      text: officers.length
-        ? `OpenCorporates officer/director search for "${term}" returned the following candidate directorship/role records across global company registers. Identity match must be confirmed:\n${lines}`
-        : `OpenCorporates officer/director search for "${term}" returned no candidate directorship records.`,
+      text: ranked.length
+        ? `OpenCorporates officer/director search for "${term}" returned the following candidate directorship/role records, scored by a fuzzy name-matching engine and ranked by confidence (low-probability results discarded). Identity match must still be confirmed:\n${lines}`
+        : `OpenCorporates officer/director search for "${term}" returned no candidate directorship records scoring above the false-positive threshold.`,
     });
   }
   return items;
